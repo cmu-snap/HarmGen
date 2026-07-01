@@ -1,0 +1,13 @@
+harm-exp/results/*
+harm-exp/traces/*
+harm-exp/cdf_plots/*
+.vagrant/*
+typescript
+*.pyc
+__pycache__/
+*.pcap
+harm-exp/models/*
+pictures/*
+harm-exp/mahak_results/*
+*.bif
+*.png

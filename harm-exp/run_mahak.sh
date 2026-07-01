@@ -1,0 +1,1 @@
+python mahak.py -cc cubic -compete_cc bbr1 -budget 300 -time_limit 240.0 -experiment_type long-flow -bdp_ratio 0.25,5,0.5 -rtt 10,100,20 -bw 25,200,35 -alpha_flows 1,5,1 -beta_flows 1,5,1 -convergence True
