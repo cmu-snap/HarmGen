@@ -33,6 +33,15 @@ ALPHA_START_TIMES_MAP = {
 
 BDP_MULTIPLES = [.25, .5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5]
 
+
+class ExperimentDataError(ValueError):
+    """A run produced unusable traces, so its harm value would be meaningless.
+
+    The usual cause is an iperf3 flow that never started or was never captured:
+    the beta long flow then records zero bytes and the harm formula reports a
+    large value that is pure measurement failure, not competition.
+    """
+
 def calculate_queue_size(bw_mbps, rtt_ms, bdp_mult):
     try:
         size = max(4, int(bdp_mult * bw_mbps * 1e6 * rtt_ms / 1e3 / 8 / PACKET_SIZE_BYTES))
@@ -284,8 +293,8 @@ def compute_average_throughput_after_convergence(times, rates, conv_time):
     return np.mean(rates_after_conv) if len(rates_after_conv) > 0 else 0
 
 
-def save_throughput_data(exp_dir, flow_type, flow_idx, times, rates):
-    filename = f"{exp_dir}/{flow_type}_thr_{flow_idx}.txt"
+def save_throughput_data(exp_dir, prefix, flow_type, flow_idx, times, rates):
+    filename = f"{exp_dir}/{prefix}_{flow_type}_thr_{flow_idx}.txt"
     with open(filename, "w") as f:
         for t, r in zip(times, rates):
             f.write(f"{t} {r}\n")
@@ -327,7 +336,7 @@ def run_tc_experiment(exp_dir, bw, rtt, queue, num_beta, num_alpha, alpha_starts
     for i in range(num_beta):
         port = base_port + i
         times, rates = extract_throughput_from_pcap(pcap_file, port, interval=1.0)
-        save_throughput_data(exp_dir, "beta", i, times, rates)
+        save_throughput_data(exp_dir, pcap_name, "beta", i, times, rates)
         beta_flows[f'beta_{i}'] = {'port': port, 'rates': rates, 'times': times}
     
     alpha_flows = {}
@@ -335,7 +344,7 @@ def run_tc_experiment(exp_dir, bw, rtt, queue, num_beta, num_alpha, alpha_starts
         port = base_port + num_beta + i
         times, rates = extract_throughput_from_pcap(pcap_file, port, interval=1.0)
         times = times + alpha_starts[i]
-        save_throughput_data(exp_dir, "alpha", i, times, rates)
+        save_throughput_data(exp_dir, pcap_name, "alpha", i, times, rates)
         alpha_flows[f'alpha_{i}'] = {'port': port, 'rates': rates, 'times': times}
     
     return beta_flows, alpha_flows
@@ -413,7 +422,15 @@ def plot_tc_long_flow_results(exp_dir, bw, rtt, queue, baseline_data, beta_flows
     plot_path = f"{exp_dir}/thr_latency.png"
     plt.savefig(plot_path, bbox_inches='tight', dpi=150)
     plt.close(fig)
-    
+
+    if baseline_avg <= 0:
+        raise ExperimentDataError(
+            f"{exp_dir}: beta solo run recorded no throughput after {conv_time:.0f}s")
+    if beta_compete_avg <= 0:
+        raise ExperimentDataError(
+            f"{exp_dir}: beta flows recorded no throughput while competing "
+            f"(solo was {baseline_avg:.2f} Mbps)")
+
     return harm, conv_time, converged
 
 
@@ -507,6 +524,8 @@ def plot_tc_short_flow_results(exp_dir, bw, rtt, queue, baseline_data, comp_a_be
         for flow in comp_a_alpha.values():
             max_alpha_end_time = max(max_alpha_end_time, flow['times'][-1])
 
+    invalid_reason = None
+
     if short_flow_harm_metric == "download_bytes":
         te = ts + SHORT_FLOW_DURATION * 2
 
@@ -526,7 +545,21 @@ def plot_tc_short_flow_results(exp_dir, bw, rtt, queue, baseline_data, comp_a_be
         absolute_harm_comp_alpha = (baseline_bytes - comp_a_beta_bytes) / baseline_bytes if baseline_bytes else 0
         absolute_harm_comp_beta = (baseline_bytes - comp_b_beta_bytes) / baseline_bytes if baseline_bytes else 0
         harm = absolute_harm_comp_alpha - absolute_harm_comp_beta
-        
+
+        # A beta long flow that downloaded nothing in [ts, te] drives its
+        # absolute harm to exactly 1.0, so the result looks like severe harm
+        # when the flow simply was not recorded.
+        if baseline_bytes <= 0:
+            invalid_reason = f"beta solo downloaded 0 MB in [{ts:.0f}s, {te:.0f}s]"
+        elif comp_a_beta_bytes <= 0:
+            invalid_reason = (f"beta long flow downloaded 0 MB while competing with "
+                              f"{cca_alpha} in [{ts:.0f}s, {te:.0f}s] "
+                              f"(solo {baseline_bytes:.2f} MB)")
+        elif comp_b_beta_bytes <= 0:
+            invalid_reason = (f"beta long flow downloaded 0 MB while competing with "
+                              f"{cca_beta} in [{ts:.0f}s, {te:.0f}s] "
+                              f"(solo {baseline_bytes:.2f} MB)")
+
         ax1.axvline(x=ts, color='purple', linestyle='-', linewidth=2, label='ts (Harm Calculation Start)')
         ax1.axvline(x=te, color='brown', linestyle='-', linewidth=2, label='te (Harm Calculation End)')
         ts_idx = int(ts) if int(ts) < len(comp_a_beta['beta_0']['times']) else len(comp_a_beta['beta_0']['times']) - 1
@@ -549,6 +582,19 @@ def plot_tc_short_flow_results(exp_dir, bw, rtt, queue, baseline_data, comp_a_be
                     f"Baseline Bytes: {baseline_bytes:.2f} MB"
     
     elif short_flow_harm_metric == "recovery_time":
+        # An empty beta trace never reaches the recovery threshold, so its
+        # recovery time stays pinned at the fallback and the harm is bogus.
+        def _beta_recorded(flows):
+            return any(len(np.asarray(f['rates'])) > 0 and np.sum(f['rates']) > 0
+                       for f in flows.values())
+
+        if len(baseline_data['times']) == 0 or np.sum(baseline_data['rates']) <= 0:
+            invalid_reason = "beta solo recorded no throughput"
+        elif not _beta_recorded(comp_a_beta):
+            invalid_reason = f"beta long flow recorded no throughput while competing with {cca_alpha}"
+        elif not _beta_recorded(comp_b_beta):
+            invalid_reason = f"beta long flow recorded no throughput while competing with {cca_beta}"
+
         beta_vs_alpha_recovery_time = SHORT_FLOW_BETA_ALONE_TIME
         if len(comp_a_beta) > 0 and len(baseline_data['times']) > 0:
             comp_a_flow = list(comp_a_beta.values())[0]
@@ -610,6 +656,9 @@ def plot_tc_short_flow_results(exp_dir, bw, rtt, queue, baseline_data, comp_a_be
     plot_path = f"{exp_dir}/short_flow_thr.png"
     plt.savefig(plot_path, bbox_inches='tight', dpi=150)
     plt.close(fig)
+
+    if invalid_reason:
+        raise ExperimentDataError(f"{exp_dir}: {invalid_reason}")
 
     return harm
 
@@ -713,8 +762,8 @@ def plot_long_flow_results_in_pdf(exp_dir, bw, rtt, queue, num_beta, num_alpha, 
     
     plot_path = f"{exp_dir}/long_flow_result.pdf"
 
-    # add a dashed line here to indicate convergence time
-    ax.axvline(x=conv_time, color='gray', linestyle='--', linewidth=1, label='Converged')
+    # # add a dashed line here to indicate convergence time
+    # ax.axvline(x=conv_time, color='gray', linestyle='--', linewidth=1, label='Converged')
 
     avg_beta_throughputs = 0
     
@@ -832,7 +881,7 @@ def plot_short_flow_results_in_pdf(exp_dir, bw, rtt, queue, num_beta, num_alpha,
             if len(alpha_times) > 0:
                 alpha_end_times.append(alpha_times[-1])
         
-        ts = SHORT_FLOW_BETA_ALONE_TIME + min(alpha_starts) if alpha_starts else SHORT_FLOW_BETA_ALONE_TIME
+        ts = SHORT_FLOW_BETA_ALONE_TIME + SHORT_FLOW_DURATION + min(alpha_starts) if alpha_starts else SHORT_FLOW_BETA_ALONE_TIME
         print(f"Beta harm calculation starts at {ts}s.")
 
         baseline_times, baseline_rates = load_throughput_data(exp_dir, "beta_solo", "beta", 0)

@@ -10,6 +10,8 @@ from scapy.all import *
 import pandas as pd
 import ruptures as rpt
 from ruptures.exceptions import BadSegmentationParameters
+from tc_single_run import ExperimentDataError
+
 
 LONG_FLOW_EXP_FINISH_TIME = 180
 SHORT_FLOW_EXP_FINISH_TIME = 60
@@ -216,8 +218,8 @@ def compute_average_throughput_after_convergence(times, rates, conv_time):
     return np.mean(rates_after_conv) if len(rates_after_conv) > 0 else 0
 
 
-def save_throughput_data(exp_dir, flow_type, flow_idx, times, rates):
-    filename = f"{exp_dir}/{flow_type}_thr_{flow_idx}.txt"
+def save_throughput_data(exp_dir, prefix, flow_type, flow_idx, times, rates):
+    filename = f"{exp_dir}/{prefix}_{flow_type}_thr_{flow_idx}.txt"
     with open(filename, "w") as f:
         for t, r in zip(times, rates):
             f.write(f"{t} {r}\n")
@@ -258,7 +260,7 @@ def run_mahimahi_experiment(exp_dir, bw, rtt, queue, num_beta, num_alpha, alpha_
     for i in range(num_beta):
         port = base_port + i
         times, rates = extract_throughput_from_pcap(pcap_file, port, interval=0.5)
-        save_throughput_data(exp_dir, "beta", i, times, rates)
+        save_throughput_data(exp_dir, pcap_name, "beta", i, times, rates)
         beta_flows[f'beta_{i}'] = {'port': port, 'rates': rates, 'times': times}
     
     alpha_flows = {}
@@ -266,7 +268,7 @@ def run_mahimahi_experiment(exp_dir, bw, rtt, queue, num_beta, num_alpha, alpha_
         port = base_port + num_beta + i
         times, rates = extract_throughput_from_pcap(pcap_file, port, interval=0.5)
         times = times + alpha_starts[i]
-        save_throughput_data(exp_dir, "alpha", i, times, rates)
+        save_throughput_data(exp_dir, pcap_name, "alpha", i, times, rates)
         alpha_flows[f'alpha_{i}'] = {'port': port, 'rates': rates, 'times': times}
     
     return beta_flows, alpha_flows
@@ -341,7 +343,15 @@ def plot_mahimahi_long_flow_results(exp_dir, bw, rtt, queue, baseline_data, beta
     plot_path = f"{exp_dir}/thr_latency.png"
     plt.savefig(plot_path, bbox_inches='tight', dpi=150)
     plt.close(fig)
-    
+
+    if baseline_avg <= 0:
+        raise ExperimentDataError(
+            f"{exp_dir}: beta solo run recorded no throughput after {conv_time:.0f}s")
+    if beta_compete_avg <= 0:
+        raise ExperimentDataError(
+            f"{exp_dir}: beta flows recorded no throughput while competing "
+            f"(solo was {baseline_avg:.2f} Mbps)")
+
     return harm, conv_time, converged
 
 
@@ -444,6 +454,8 @@ def plot_mahimahi_short_flow_results(exp_dir, bw, rtt, queue, baseline_data, com
     
     time_interval = 0.5
     
+    invalid_reason = None
+
     if short_flow_harm_metric == 'download_bytes':
         te = ts + 20
         
@@ -485,6 +497,13 @@ def plot_mahimahi_short_flow_results(exp_dir, bw, rtt, queue, baseline_data, com
         absolute_harm_vs_alpha = (d1 - beta_vs_alpha_d2) / d1 if d1 > 0 else 0
         absolute_harm_vs_beta = (d1 - beta_vs_beta_d2) / d1 if d1 > 0 else 0
         harm = absolute_harm_vs_alpha - absolute_harm_vs_beta
+
+        if d1 <= 0:
+            invalid_reason = "beta solo downloaded nothing in the harm window"
+        elif beta_vs_alpha_d2 <= 0:
+            invalid_reason = f"beta long flow downloaded nothing while competing with {cca_alpha}"
+        elif beta_vs_beta_d2 <= 0:
+            invalid_reason = f"beta long flow downloaded nothing while competing with {cca_beta}"
         
         ax1.axvline(x=ts, color='purple', linestyle='-', linewidth=2, label='ts (Harm Calculation Start)')
         ax1.axvline(x=te, color='brown', linestyle='-', linewidth=2, label='te (Harm Calculation End)')
@@ -515,6 +534,16 @@ def plot_mahimahi_short_flow_results(exp_dir, bw, rtt, queue, baseline_data, com
                 f"Max Alpha End Time: {max_alpha_end_time:.2f} s"
     
     else:
+        def _beta_recorded(d):
+            return bool(d) and len(np.asarray(d['rates'])) > 0 and np.sum(d['rates']) > 0
+
+        if not _beta_recorded(baseline_data):
+            invalid_reason = "beta solo recorded no throughput"
+        elif not _beta_recorded(comp_a_beta_data):
+            invalid_reason = f"beta long flow recorded no throughput while competing with {cca_alpha}"
+        elif not _beta_recorded(comp_b_beta_data):
+            invalid_reason = f"beta long flow recorded no throughput while competing with {cca_beta}"
+
         beta_vs_alpha_recovery_time = 60
         if comp_a_beta_data and baseline_data:
             for time, rate, beta_solo_rate in zip(comp_a_beta_data['times'], comp_a_beta_data['rates'], baseline_rates):
@@ -563,7 +592,10 @@ def plot_mahimahi_short_flow_results(exp_dir, bw, rtt, queue, baseline_data, com
     plt.close(fig)
     
     os.system(f"rm -rf {exp_dir}/*.pcap")
-    
+
+    if invalid_reason:
+        raise ExperimentDataError(f"{exp_dir}: {invalid_reason}")
+
     return harm
 
 

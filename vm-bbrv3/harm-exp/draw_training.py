@@ -149,20 +149,33 @@ def plot_individual_sampling(df, labels, y_vars, param_ranges, base_filename, dr
         plt.close()
 
 if __name__ == "__main__":
-    machine = "HarmGen_VM1"
+    import sys
+
+    # Usage: python3 draw_training.py <beta_cca> <alpha_cca> <time_limit> <flow_type> [results_dir]
+    # e.g.   python3 draw_training.py cubic bbr1 240.0 long-flow
+    # Run from inside harm-exp; reads
+    # ./mahak_results/<beta>-<alpha>-<time>-<flow_type>/selected_samples.csv
+    if len(sys.argv) < 5:
+        sys.exit("usage: draw_training.py <beta_cca> <alpha_cca> <time_limit> <flow_type> [results_dir]")
+
     tool = "mahak"
-    beta_cca = "cubic"
-    alpha_cca = "bbr1"
-    time = 240.0
-    flow_type = "long-flow"
-    
+    beta_cca = sys.argv[1]
+    alpha_cca = sys.argv[2]
+    time = float(sys.argv[3])
+    flow_type = sys.argv[4]
+    results_dir = sys.argv[5] if len(sys.argv) > 5 else "./mahak_results"
+
     draw_arrows_flag = False
 
-    csv_file_path = f"./{machine}/harm-exp/mahak_results_with_conv/{beta_cca}-{alpha_cca}-{time}-{flow_type}/selected_samples.csv"
-    
+    exp_dir = f"{results_dir}/{beta_cca}-{alpha_cca}-{time}-{flow_type}"
+    csv_file_path = f"{exp_dir}/selected_samples.csv"
+
     data = load_and_prep_data(csv_file_path)
-    if not data.empty:
-        print(f"Loaded data with {len(data)} rows.")
-        plot_labels, target_vars, ranges = get_plot_params(flow_type)
-        base_name = f'sampling_{tool}_{beta_cca}_{alpha_cca}_{time}_{flow_type}_with_conv'
-        plot_individual_sampling(data, plot_labels, target_vars, ranges, base_name, draw_arrows=draw_arrows_flag)
+    if data.empty:
+        sys.exit(f"No samples found at {csv_file_path}\n"
+                 f"Run mahak.py for {beta_cca} vs {alpha_cca} first.")
+
+    print(f"Loaded data with {len(data)} rows.")
+    plot_labels, target_vars, ranges = get_plot_params(flow_type)
+    base_name = f'{exp_dir}/sampling_{tool}_{beta_cca}_{alpha_cca}_{time}_{flow_type}'
+    plot_individual_sampling(data, plot_labels, target_vars, ranges, base_name, draw_arrows=draw_arrows_flag)

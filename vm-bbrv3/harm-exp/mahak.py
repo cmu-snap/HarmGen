@@ -21,7 +21,7 @@ import psutil
 from datetime import datetime
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from tc_single_run import run_tc_long_flow_experiment, run_tc_short_flow_experiment
+from tc_single_run import ExperimentDataError, run_tc_long_flow_experiment, run_tc_short_flow_experiment
 from mahimahi_single_run import run_mahimahi_long_flow_experiment, run_mahimahi_short_flow_experiment
 from tc_single_run import calculate_queue_size
 
@@ -161,11 +161,17 @@ def oracle_query_harm(sample_row, beta_cca, alpha_cca, experiment_type, short_fl
         exp_dir = f"{dir_path}/experiments/{bw}bw-{rtt}rtt-{queue}q-{beta_cca}-{num_beta_flows}-{alpha_cca}-{num_alpha_flows}-{alpha_start_type}start"
         os.makedirs(exp_dir, exist_ok=True)
         
-        # if beta_cca == "prague" or alpha_cca == "prague":
-        harm = run_tc_short_flow_experiment(exp_dir, bw, rtt, queue, num_beta_flows, num_alpha_flows, alpha_start_type, beta_cca, alpha_cca, short_flow_harm_metric, dualpi2=False)
-        # else:
-            # harm = run_mahimahi_short_flow_experiment(exp_dir, bw, rtt, queue, num_beta_flows, num_alpha_flows, alpha_start_type, beta_cca, alpha_cca, short_flow_harm_metric)
-        
+        use_dualpi2 = (beta_cca == "prague" or alpha_cca == "prague")
+        try:
+            harm = run_tc_short_flow_experiment(exp_dir, bw, rtt, queue, num_beta_flows, num_alpha_flows, alpha_start_type, beta_cca, alpha_cca, short_flow_harm_metric, dualpi2=use_dualpi2)
+        except ExperimentDataError as exc:
+            logger.warning(f"Short flow experiment produced unusable data ({exc}); retrying once")
+            try:
+                harm = run_tc_short_flow_experiment(exp_dir, bw, rtt, queue, num_beta_flows, num_alpha_flows, alpha_start_type, beta_cca, alpha_cca, short_flow_harm_metric, dualpi2=use_dualpi2)
+            except ExperimentDataError as exc2:
+                logger.error(f"Short flow experiment still unusable ({exc2}); recording harm 0.0")
+                return np.array([0.0])
+
         logger.info(f"Short flow experiment completed: BW={bw}, RTT={rtt}, Queue={queue}, Harm={harm:.4f}")
         return np.array([harm])
     else:
@@ -173,11 +179,17 @@ def oracle_query_harm(sample_row, beta_cca, alpha_cca, experiment_type, short_fl
         exp_dir = f"{dir_path}/experiments/{bw}bw-{rtt}rtt-{queue}q-{beta_cca}-{num_beta_flows}-{alpha_cca}-{num_alpha_flows}"
         os.makedirs(exp_dir, exist_ok=True)
         
-        # if beta_cca == "prague" or alpha_cca == "prague":
-        harm, conv_time, converged = run_tc_long_flow_experiment(exp_dir, bw, rtt, queue, num_beta_flows, num_alpha_flows, alpha_start_times, beta_cca, alpha_cca, dualpi2=False, convergence=convergence)
-        # else:
-            # harm, conv_time, converged = run_mahimahi_long_flow_experiment(exp_dir, bw, rtt, queue, num_beta_flows, num_alpha_flows, alpha_start_times, beta_cca, alpha_cca)
-        
+        use_dualpi2 = (beta_cca == "prague" or alpha_cca == "prague")
+        try:
+            harm, conv_time, converged = run_tc_long_flow_experiment(exp_dir, bw, rtt, queue, num_beta_flows, num_alpha_flows, alpha_start_times, beta_cca, alpha_cca, dualpi2=use_dualpi2, convergence=convergence)
+        except ExperimentDataError as exc:
+            logger.warning(f"Long flow experiment produced unusable data ({exc}); retrying once")
+            try:
+                harm, conv_time, converged = run_tc_long_flow_experiment(exp_dir, bw, rtt, queue, num_beta_flows, num_alpha_flows, alpha_start_times, beta_cca, alpha_cca, dualpi2=use_dualpi2, convergence=convergence)
+            except ExperimentDataError as exc2:
+                logger.error(f"Long flow experiment still unusable ({exc2}); recording harm 0.0")
+                return np.array([0.0])
+
         if converged:
             logger.info(f"Long flow experiment converged at {conv_time:.2f}s: BW={bw}, RTT={rtt}, Queue={queue}, Harm={harm:.4f}")
             return np.array([harm])

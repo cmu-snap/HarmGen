@@ -8,8 +8,10 @@ target_cc = sys.argv[2]
 compete_cc = sys.argv[3]
 top_num = int(sys.argv[4])
 times = float(sys.argv[5])
+short_flow_harm_metric = sys.argv[6]
 
-df = pd.read_csv(f'results/{target_cc}-{compete_cc}-{times}-long-flow/{tool}_{target_cc}_{compete_cc}.csv')
+df = pd.read_csv(f'results/{target_cc}-{compete_cc}-{times}-short-flow/{tool}_{target_cc}_{compete_cc}.csv')
+
 top = df.sort_values(by='harm', ascending=False).head(top_num).copy()
 
 # change the order of top
@@ -26,7 +28,7 @@ bubble_scale = (max_bubble - min_bubble) / (bdp_max - bdp_min)
 top['bubble_size'] = min_bubble + (top['bdp_ratio'] - bdp_min) * bubble_scale
 
 harm_min = -0.5
-harm_max = 1
+harm_max = 2
 
 scatter = ax.scatter(
     x=top['BW'],
@@ -46,8 +48,8 @@ cbar.set_label('Harm Value', fontsize=16)
 
 ax.set_xlabel('Bandwidth (Mbps)', fontsize=16)
 ax.set_ylabel('RTT (ms)', fontsize=16)
-ax.set_xlim(25, 401)
-ax.set_ylim(10, 321)
+ax.set_xlim(25, 201)
+ax.set_ylim(10, 101)
 ax.tick_params(axis='both', which='major', labelsize=14)
 
 ax.set_title(f'Top {top_num} Harmful Network Environments in {target_cc} vs {compete_cc}', fontsize=20)
@@ -84,4 +86,4 @@ def add_bubble_legend(ax):
 
 add_bubble_legend(ax)
 
-plt.savefig(f'results/{target_cc}-{compete_cc}-{times}-long-flow/top_{top_num}_harm_{tool}_{target_cc}_{compete_cc}.png', dpi=300, bbox_inches='tight')
+plt.savefig(f'results/{target_cc}-{compete_cc}-{times}-short-flow/top_{top_num}_harm_{tool}_{target_cc}_{compete_cc}.png', dpi=300, bbox_inches='tight')

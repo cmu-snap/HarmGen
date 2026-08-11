@@ -11,7 +11,7 @@ import logging
 import psutil
 import time as ti
 from scapy.all import *
-from tc_single_run import run_tc_long_flow_experiment, run_tc_short_flow_experiment
+from tc_single_run import ExperimentDataError, run_tc_long_flow_experiment, run_tc_short_flow_experiment
 from mahimahi_single_run import run_mahimahi_long_flow_experiment, run_mahimahi_short_flow_experiment
 
 alpha_cca = sys.argv[2]  # prague
@@ -117,7 +117,8 @@ def get_initial_pop(initial_pop_size, min_bw=MIN_BW, max_bw=MAX_BW, min_rtt=MIN_
     return initial_pop
 
 def selection(population, fitness_per_exp):
-    population_to_fitness = {chrom: fitness_per_exp[chrom] for chrom in population if chrom in fitness_per_exp}
+    population_to_fitness = {chrom: fitness_per_exp[chrom] for chrom in population
+                             if chrom in fitness_per_exp and fitness_per_exp[chrom] is not None}
     top_half = sorted(population_to_fitness.items(), key=lambda item: item[1], reverse=True)[:(len(population) // 2)]
     return [chrom for (chrom,fitness) in top_half]
 
@@ -371,7 +372,7 @@ def get_pop_stats(population, gen, all_harm_dict):
     if not pop_with_harm:
         return {'generation': gen, 'avg': 0, 'best': 0, 'size_of_set': 0, 'median': 0}
     
-    harms = [harm for _, harm in pop_with_harm if harm != -1]
+    harms = [harm for _, harm in pop_with_harm if harm is not None and harm != -1]
     
     if not harms:
         return {'generation': gen, 'avg': 0, 'best': 0, 'size_of_set': 0, 'median': 0}

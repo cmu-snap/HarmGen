@@ -48,8 +48,8 @@ cbar.set_label('Harm Value', fontsize=16)
 
 ax.set_xlabel('Bandwidth (Mbps)', fontsize=16)
 ax.set_ylabel('RTT (ms)', fontsize=16)
-ax.set_xlim(25, 401)
-ax.set_ylim(10, 321)
+ax.set_xlim(25, 201)
+ax.set_ylim(10, 101)
 ax.tick_params(axis='both', which='major', labelsize=14)
 
 ax.set_title(f'Top {top_num} Harmful Network Environments in {target_cc} vs {compete_cc}', fontsize=20)

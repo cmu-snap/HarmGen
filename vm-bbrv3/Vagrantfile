@@ -1,0 +1,29 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+# VM for the BBRv3 kernel patch.
+# Kept separate from vm-dualpi2-prague because the BBRv3 and the
+# DualPI2 + Prague kernel patches cannot be applied to the same kernel.
+Vagrant.configure("2") do |config|
+  config.vm.box = "generic/ubuntu2204"
+
+  # Disable automatic box update checking. If you disable this, then
+  # boxes will only be checked for updates when the user runs
+  # `vagrant box outdated`. This is not recommended.
+  # config.vm.box_check_update = false
+
+  config.vm.synced_folder ".", "/vagrant", disabled: true
+  config.vm.synced_folder "./harm-exp", "/home/vagrant/harm-exp", type: 'rsync'
+
+  config.vm.define "vm-harmgen-bbrv3"
+  config.vm.hostname = "vm-harmgen-bbrv3"
+  config.vm.network "private_network", ip: "192.168.121.5"
+  config.vm.provider "libvirt" do |lv|
+    lv.storage_pool_name = 'default'
+    lv.memory = 8192
+    lv.cpus = 8
+  end
+
+  # Install the BBRv3 patch here, e.g.
+  # config.vm.provision "shell", path: "provision-bbrv3.sh"
+end

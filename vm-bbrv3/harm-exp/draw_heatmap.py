@@ -1,16 +1,30 @@
+import os
+import sys
+
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-machine = "HarmGen_VM1"
-tool = "mahak"
-beta_cca = "cubic"
-alpha_cca = "bbr1"
-time = 240.0
-flow_type = "long-flow"
-suffix = "_jfi"
+# Usage: python3 draw_heatmap.py <beta_cca> <alpha_cca> <time_limit> <flow_type> [results_dir]
+# e.g.   python3 draw_heatmap.py cubic bbr 240.0 long-flow
+# Run from inside harm-exp; reads ./mahak_results/<beta>-<alpha>-<time>-<flow_type>/final_predictions.csv
+if len(sys.argv) < 5:
+    sys.exit("usage: draw_heatmap.py <beta_cca> <alpha_cca> <time_limit> <flow_type> [results_dir]")
 
-csv_file_path = f"./{machine}/harm-exp/mahak_results{suffix}/{beta_cca}-{alpha_cca}-{time}-{flow_type}/final_predictions.csv"
+tool = "mahak"
+beta_cca = sys.argv[1]
+alpha_cca = sys.argv[2]
+time = float(sys.argv[3])
+flow_type = sys.argv[4]
+results_dir = sys.argv[5] if len(sys.argv) > 5 else "./mahak_results"
+suffix = ""
+
+exp_dir = f"{results_dir}/{beta_cca}-{alpha_cca}-{time}-{flow_type}"
+csv_file_path = f"{exp_dir}/final_predictions.csv"
+
+if not os.path.exists(csv_file_path):
+    sys.exit(f"No predictions found at {csv_file_path}\n"
+             f"Run mahak.py for {beta_cca} vs {alpha_cca} first.")
 
 df = pd.read_csv(csv_file_path)
 
@@ -98,5 +112,8 @@ for y_var in y_vars:
     cbar.set_label('Harm', size=35, labelpad=20)
 
     plt.tight_layout()
-    plt.savefig(f'{tool}-{y_var}-heatmap-{beta_cca}-{alpha_cca}-{flow_type}{suffix}.pdf')
+    out_path = f'{exp_dir}/{tool}-{y_var}-heatmap-{beta_cca}-{alpha_cca}-{flow_type}{suffix}.pdf'
+    plt.savefig(out_path)
+    plt.close()
+    print(f"wrote {out_path}")
     plt.close()
