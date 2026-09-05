@@ -43,7 +43,12 @@ parser.add_argument('-alpha_flows', type=str, help='Min, Max and Search Step for
 parser.add_argument('-beta_flows', type=str, help='Min, Max and Search Step for Number of Beta flows. Ex: 1,5,1', default='1,5,1')
 parser.add_argument('-alpha_start', type=str, help='Min, Max and Search Step for Alpha start type. Ex: 1,3,1', default='1,1,1')
 
-parser.add_argument('-convergence', type=bool, help='Whether to use convergence algorithm in long-flow experiments', default=True)
+def _str2bool(value):
+    # argparse's type=bool makes any non-empty string true, so '-convergence False'
+    # would have silently enabled convergence.
+    return str(value).strip().lower() not in ('false', '0', 'no', 'n', '')
+
+parser.add_argument('-convergence', type=_str2bool, help='Whether to use convergence algorithm in long-flow experiments', default=True)
 
 args = parser.parse_args()
 beta_cca = args.cc

@@ -19,6 +19,7 @@ Each folder is a standalone Vagrant environment: run all `vagrant` commands from
 
 - [Code Structure](#code-structure)
 - [Setting up the VMs](#setting-up-the-vms)
+  - [Tested environment](#tested-environment)
   - [Host prerequisites](#host-prerequisites)
   - [VM 1 — BBRv3](#vm-1--bbrv3)
     - [1. Create the SSH key](#1-create-the-ssh-key)
@@ -83,16 +84,43 @@ Results are written into `harm-exp/mahak_results/` (Mahak) and `harm-exp/results
 
 ## Setting up the VMs
 
+### Tested environment
+
+| | |
+| --- | --- |
+| Host | Ubuntu 20.04.6 LTS, kernel 5.4.0, Vagrant 2.4.7, vagrant-libvirt 0.12.2 |
+| Guest | `generic/ubuntu2204` box, Ubuntu 22.04, Python 3.10 |
+
+The host only needs KVM, libvirt and a kernel toolchain, so other Ubuntu releases work too; pick the matching setup path below.
+
 ### Host prerequisites
 
-Vagrant + libvirt:
+**On Ubuntu 20.04**, the upstream vagrant-libvirt installer handles everything, including Vagrant itself:
 
 ``` bash
 curl -O https://raw.githubusercontent.com/vagrant-libvirt/vagrant-libvirt-qa/main/scripts/install.bash
 chmod a+x ./install.bash
 ./install.bash || exit 1
 rm ./install.bash
+```
 
+**On Ubuntu 22.04 and newer**, install the packages directly instead. That script installs the `qemu` metapackage, which exists only up to 20.04, and it runs under `set -o errexit`, so on a newer release it aborts before Vagrant is ever installed:
+
+``` bash
+sudo apt update
+sudo apt install -y \
+    git wget qemu-system-x86 qemu-utils \
+    libvirt-clients libvirt-daemon libvirt-daemon-system dnsmasq ebtables \
+    libvirt-dev ruby-dev pkg-config build-essential
+sudo systemctl restart libvirtd
+```
+
+then install Vagrant from HashiCorp's releases. `libvirt-dev`, `ruby-dev` and `pkg-config` are in that list because `vagrant-libvirt` compiles the `ruby-libvirt` native extension at install time; `install.bash` pulls them in through `apt-get build-dep`, so they only need naming on the manual path.
+
+Either way, finish with the plugins:
+
+``` bash
+vagrant plugin install vagrant-libvirt      # already installed by install.bash on 20.04
 vagrant plugin install vagrant-rsync-back
 
 # Allow the VM private network through the firewall
@@ -109,6 +137,12 @@ Log out and back in, then check:
 ``` bash
 id -nG                                 # must list kvm and libvirt
 virsh -c qemu:///system list --all     # must work without sudo
+```
+
+`usermod` only affects new logins. If you are scripting the setup and cannot log out, run the remaining commands through a fresh login shell, which picks up the new groups:
+
+``` bash
+sudo -u "$USER" -H bash -lc 'cd vm-bbrv3 && vagrant up --provider=libvirt'
 ```
 
 Kernel build tools (both kernels are compiled **on the host**, not in the VMs):
@@ -207,6 +241,12 @@ until ssh -o ConnectTimeout=5 vagrant@192.168.121.5 "uname -r" 2>/dev/null | gre
 
 #### 5. Verify
 
+`gce-install.sh` runs `make modules_install` on the host, so the module index files under `/lib/modules/<ver>/` are built by the host's `depmod` and shipped into the guest. If the host's kmod is newer than the guest's, the guest cannot read those indices and `modinfo` reports `Module tcp_bbr not found` even though the kernel is correct. Rebuild the index in the guest first:
+
+``` bash
+ssh vagrant@192.168.121.5 "sudo depmod -a"
+```
+
 ``` bash
 ssh vagrant@192.168.121.5 "uname -r; sudo modinfo tcp_bbr | head -3; sysctl net.ipv4.tcp_available_congestion_control"
 ```
@@ -220,6 +260,8 @@ net.ipv4.tcp_available_congestion_control = reno bbr bbr1 bic cdg cubic dctcp we
 ```
 
 `version: 3` confirms BBRv3. `bbr` is v3, `bbr1` is v1.
+
+`modinfo` is the only part that depends on the index. `cat /sys/module/tcp_bbr/version` reads the same value straight from the running kernel and works regardless of kmod versions, so use it if `depmod -a` does not help.
 
 ### VM 2 — DualPI2 + TCP Prague
 
@@ -397,6 +439,18 @@ Run from inside `vm-bbrv3/` or `vm-dualpi2-prague/`:
 | VM never returns after reboot | For `vm-bbrv3`, almost always `CONFIG_VIRTIO_BLK`. Inspect with `virsh -c qemu:///system console <domain>`; recover with `vagrant destroy -f && vagrant up`. |
 | `uname -r` unchanged after install | The build failed but the script continued. Check `/tmp/make.*` (BBRv3) or the `make` output (L4S). |
 | Results missing after `vagrant rsync` | `--delete` removed them. Use `vagrant rsync-back` first. |
+| `modinfo: ERROR: Module tcp_bbr not found` | Host/guest kmod skew, not a bad build. Run `sudo depmod -a` in the guest; see VM 1 step 5. |
+| `apt-get install qemu` has no installation candidate | You are on Ubuntu 22.04 or newer, where the `qemu` metapackage is gone. Use the package list in Host prerequisites, not the upstream `install.bash`. |
+| `vagrant plugin install vagrant-libvirt` fails building native extensions | Missing `libvirt-dev`, `ruby-dev` or `pkg-config`. |
+| `virsh` still needs sudo after `usermod` | Group changes only apply to new logins. Log out and back in, or use `sudo -u "$USER" -H bash -lc '...'`. |
+
+These three appear during a normal, successful setup and can be ignored:
+
+| Message | Where |
+| --- | --- |
+| `.config:834:warning: symbol value '0' invalid for BASE_SMALL` | `gce-install.sh`, during `make olddefconfig` |
+| `[fog][WARNING] Unrecognized arguments: libvirt_ip_command` | any `vagrant ssh` / `vagrant rsync` |
+| `Warning: os-prober will not be executed...` | `update-grub` in the guest, at the end of VM 1 step 4 |
 
 ### Removing a VM
 
@@ -476,6 +530,12 @@ cd ~/harm-exp
 python3 -c "import numpy, pandas, matplotlib, seaborn, sklearn, scapy, ruptures, psutil, modAL; print('deps ok')"
 ```
 
+The pip line is unpinned, so it resolves to whatever is current. A known-good set on the 22.04 guest is numpy 2.2.6, pandas 2.3.3, matplotlib 3.10.9, seaborn 0.13.2, scikit-learn 1.7.2, scipy 1.15.3, scapy 2.7.0, ruptures 1.1.10, psutil 7.2.2. Pin these if a future resolve breaks the vendored `modAL`.
+
+`pip3 install` writes into the system Python, which the 22.04 guest allows. On a 23.04 or newer guest the same line fails with `externally-managed-environment` and needs `--break-system-packages` or a virtualenv.
+
+**Guest disk.** Captures are full-packet, and one 180 s run at 25 Mbps produces a ~580 MB pcap; at the search space's 200 Mbps ceiling that is several GB, and two captures coexist while the second is written. The pcaps are deleted after processing, so the steady state is only ~0.5 MB per experiment, but the transient peak needs room. The box ships a 128 GB disk, which is enough.
+
 ### Per-boot configuration
 
 `vm-bbrv3` needs nothing beyond the dependencies — `bbr` (v3), `bbr1` and `cubic` are all built in.
@@ -523,7 +583,7 @@ Outputs land in `./mahak_results/` (Mahak) and `./results/` (HarmGen).
 
 ### Section 7.2 — L4S: TCP Prague vs Cubic
 
-On **vm-dualpi2-prague**, after the per-boot configuration above. The paper uses HarmGen here. `tc_single_run.py` switches the bottleneck to `dualpi2` on its own whenever either CCA is `prague`; everything else uses `pfifo`.
+On **vm-dualpi2-prague**, after the per-boot configuration above. The paper uses HarmGen here. Both drivers pick the bottleneck qdisc from the CCA pair: `genetic-algorithm.py` and `mahak.py` request `dualpi2` whenever either CCA is `prague`, and `pfifo` otherwise. `tc_single_run.py` only applies the choice it is given, so reading that file alone does not show the rule.
 
 ``` bash
 cd ~/harm-exp
@@ -540,7 +600,31 @@ Or one at a time:
 
 ### Runtime and retrieving results
 
-One long-flow evaluation is two 180 s runs (β alone, then β vs α); one short-flow evaluation is three 120 s runs. Each HarmGen script stops at whichever comes first, the experiment budget or `TIME_LIMIT`; with the shipped settings the 30-hour cap is reached first, so budget on **about 30 hours per script** and several days for all of Section 7. Use `tmux` or `nohup`.
+One long-flow evaluation is two 180 s runs (β alone, then β vs α); one short-flow evaluation is three 120 s runs. Measured end to end, either costs about **6.5 minutes**, including pcap processing and plotting. Convergence detection does not shorten a run; it picks a point inside the trace to measure from.
+
+A run stops at whichever comes first, its experiment budget or `TIME_LIMIT`. **`TIME_LIMIT` is in hours**, so the `240.0` in the Mahak scripts is ten days and never binds; only the budget does. Which limit binds differs per script:
+
+| Script | Tool | Binding limit | Evaluations | Approx. wall clock |
+| --- | --- | --- | --- | --- |
+| `run_section7_1.sh` | Mahak | `BUDGET=300`, 4 stages | 4 x 301 | **~130 h (~5.4 days)** |
+| `run_section7_2.sh` | HarmGen | `TIME_LIMIT=30.0`, 3 stages | capped | **~90 h (~3.8 days)** |
+| `run_mahak.sh` | Mahak | `BUDGET=300`, 1 stage | 301 | ~32 h |
+| `run_harmgen_long_flow.sh` | HarmGen | `TIME_LIMIT=30.0` | capped | ~30 h |
+| `run_harmgen_short_flow.sh` | HarmGen | `TIME_LIMIT=30.0` | capped | ~30 h |
+
+Mahak costs `BUDGET + 1` evaluations, not `BUDGET`: it runs one bootstrap experiment to initialise the active learner before its `BUDGET` iterations. HarmGen breaks when the next generation *would* exceed the budget, so it runs at most `BUDGET` and usually slightly fewer.
+
+`run_section7_1.sh` also ends with two `plot_mahak_compare.py` calls, each running one experiment per CCA for every rank it plots, so `TOP_N=3` adds roughly another 1.5 h.
+
+Use `tmux` or `nohup`. Reproducing all of Section 7 is on the order of ten days.
+
+To check the pipeline works before committing to that, shrink the run rather than waiting. For Mahak, any small `-budget` works. For HarmGen, **keep `pop_size` at 4 or more and `budget` above `pop_size`** — the mating pool is half the population and crossover needs pairs, so a population below 4 produces no offspring, and a budget at or below `pop_size` trips the budget guard before the first generation runs. The cheapest run that still measures anything is 4 experiments, about 26 minutes:
+
+``` bash
+cd ~/harm-exp
+HARMGEN_BUDGET=5 HARMGEN_LABEL=smoke \
+python3 genetic-algorithm.py cubic bbr 5 smoke 1 701 mutate_v2 0.5 4 0.5 0.5
+```
 
 Pull results back to the host **before** any `vagrant rsync` or `vagrant up`:
 

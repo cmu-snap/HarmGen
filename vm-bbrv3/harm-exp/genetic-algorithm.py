@@ -50,7 +50,7 @@ bdp_multiples = [.25, .5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5]
 # bdp_multiples = [2]
 bdp_multiples_to_int = {bdp_multiples[i]: i for i in range(len(bdp_multiples))}
 
-logger = logging.getLogger()
+logger = logging.getLogger('HarmGen')
 logger.setLevel(logging.DEBUG)
 random.seed(seed)
 
@@ -399,7 +399,8 @@ populations = []
 gen = 0
 identical_child = 0
 new_pop = get_initial_pop(pop_size)
-logger.info("Starting tc genetic algorithm with DualPI2")
+use_dualpi2 = (beta_cca == "prague" or alpha_cca == "prague")
+logger.info(f"Starting tc genetic algorithm with {'DualPI2' if use_dualpi2 else 'pfifo'}")
 process = psutil.Process(os.getpid())
 initial_mem = process.memory_info().rss / (1024 * 1024)
 logger.info(f"Initial memory: {initial_mem:.2f} MB")
@@ -414,7 +415,13 @@ while (ti.time() - total_start_time) < time_limit_seconds:
     
     experiments_to_run = [exp for exp in new_pop if exp not in all_harm_dict.keys()]
     logger.info(f"New experiments: {len(experiments_to_run)}")
-    
+
+    if not experiments_to_run:
+        logger.warning(f"No new candidates at generation {gen} (population size "
+                       f"{len(new_pop)}); the population can no longer produce "
+                       f"offspring, stopping. Use pop_size >= 4.")
+        break
+
     if len(all_harm_dict) + len(experiments_to_run) >= experiment_budget:
         logger.info("Budget will be exceeded, breaking")
         break
