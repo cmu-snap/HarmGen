@@ -5,7 +5,9 @@
 # Kept separate from vm-dualpi2-prague because the BBRv3 and the
 # DualPI2 + Prague kernel patches cannot be applied to the same kernel.
 Vagrant.configure("2") do |config|
-  config.vm.box = "generic/ubuntu2204"
+  # Set HARMGEN_BOX to start from a prebuilt box instead of building the
+  # kernel (README, "Alternative: prebuilt Vagrant boxes").
+  config.vm.box = ENV.fetch("HARMGEN_BOX", "generic/ubuntu2204")
 
   # Disable automatic box update checking. If you disable this, then
   # boxes will only be checked for updates when the user runs

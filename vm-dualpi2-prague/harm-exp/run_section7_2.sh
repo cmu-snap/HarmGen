@@ -5,7 +5,7 @@
 # Run from ~/harm-exp inside the VM.
 #
 # PREREQUISITE (once per boot, see README):
-#   sudo modprobe sch_dualpi2 tcp_prague
+#   sudo modprobe -a sch_dualpi2 tcp_prague
 #   sudo sysctl -w net.ipv4.tcp_ecn=3
 #   sudo sysctl -w net.ipv4.tcp_congestion_control=prague
 set -u

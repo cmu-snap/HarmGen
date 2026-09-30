@@ -2,7 +2,7 @@
 # Mahak, long-flow workload: Cubic vs Prague over DualPI2.
 # RUN ON vm-dualpi2-prague.  Swap the two CCAs to measure harm in the other direction.
 # Prerequisites once per boot -- see README:
-#   sudo modprobe sch_dualpi2 tcp_prague
+#   sudo modprobe -a sch_dualpi2 tcp_prague
 #   sudo sysctl -w net.ipv4.tcp_ecn=3
 #   sudo sysctl -w net.ipv4.tcp_congestion_control=prague
 set -u

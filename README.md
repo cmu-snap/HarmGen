@@ -35,6 +35,14 @@ Each folder is a standalone Vagrant environment: run all `vagrant` commands from
     - [5. Build and install](#5-build-and-install)
     - [6. Verify](#6-verify)
     - [7. Build the patched iproute2](#7-build-the-patched-iproute2)
+  - [Alternative: prebuilt Vagrant boxes](#alternative-prebuilt-vagrant-boxes)
+    - [1. Prepare the host](#1-prepare-the-host)
+    - [2. Download the boxes](#2-download-the-boxes)
+    - [3. Add the boxes to Vagrant](#3-add-the-boxes-to-vagrant)
+    - [4. Start the VMs](#4-start-the-vms)
+    - [5. Verify the VMs](#5-verify-the-vms)
+    - [6. Continue with Section 7](#6-continue-with-section-7)
+    - [Removing the boxes](#removing-the-boxes)
   - [Common Vagrant commands](#common-vagrant-commands)
   - [Troubleshooting](#troubleshooting)
   - [Removing a VM](#removing-a-vm)
@@ -83,6 +91,8 @@ The two `harm-exp` trees hold identical `.py` files; only the run scripts differ
 Results are written into `harm-exp/mahak_results/` (Mahak) and `harm-exp/results/` (HarmGen). Both are gitignored and created on the first run.
 
 ## Setting up the VMs
+
+There are two ways to get the VMs: build both kernels yourself (VM 1 and VM 2 below), or download the two prebuilt boxes and skip every kernel build ([Alternative: prebuilt Vagrant boxes](#alternative-prebuilt-vagrant-boxes)).
 
 ### Tested environment
 
@@ -369,7 +379,7 @@ until ssh -o ConnectTimeout=5 vagrant@192.168.121.15 "uname -r" 2>/dev/null | gr
 ``` bash
 ssh vagrant@192.168.121.15 "
   uname -r
-  sudo modprobe sch_dualpi2 tcp_prague
+  sudo modprobe -a sch_dualpi2 tcp_prague
   lsmod | grep -E 'dualpi2|prague'
   sysctl net.ipv4.tcp_available_congestion_control
 "
@@ -413,6 +423,118 @@ For comparison, the stock `tc` on the same qdisc prints only:
 
 ```
 qdisc dualpi2 8001: root refcnt 2 [Unknown qdisc, optlen=104]
+```
+
+### Alternative: prebuilt Vagrant boxes
+
+Both VMs are also published as Vagrant boxes for the libvirt provider. Each box is the corresponding VM above after every step: kernel installed and booted by default, [experiment dependencies](#experiment-dependencies) installed, and, in the DualPI2 box, the patched iproute2 at `~/iproute2/tc/tc`. With the boxes you skip the kernel builds, the dedicated SSH keys and `gce-install.sh`.
+
+| Box name | File | Kernel | Size | SHA-256 | Download |
+| --- | --- | --- | --- | --- | --- |
+| `harmgen/bbrv3` | `harmgen-bbrv3.box` | 6.13.7 + BBRv3 | 3.8 GiB | `32da0ae760c7dd5f3ec475e8ec72f10a696f660c831186bda23b6ebe779abe19` | [Tsinghua Cloud](https://cloud.tsinghua.edu.cn/d/3bae9158af5c44578962/files/?p=%2Fharmgen-bbrv3.box&dl=1) |
+| `harmgen/dualpi2-prague` | `harmgen-dualpi2-prague.box` | 5.15.72 + DualPI2 + TCP Prague | 4.1 GiB | `9d6357fced419d118e8c5e93bc5eb6df806f40251a59d2881879615599319fe3` | [Tsinghua Cloud](https://cloud.tsinghua.edu.cn/d/3bae9158af5c44578962/files/?p=%2Fharmgen-dualpi2-prague.box&dl=1) |
+
+The boxes were tested with Vagrant 2.4.7 and vagrant-libvirt 0.12.2. Disk space: each box exists three times — the downloaded `.box`, the copy `vagrant box add` extracts under `~/.vagrant.d/boxes`, and the image the first `vagrant up` imports into `/var/lib/libvirt/images`. The `.box` can be deleted after step 3.
+
+#### 1. Prepare the host
+
+Follow [Host prerequisites](#host-prerequisites) up to and including the `virsh` check. Skip the kernel build tools at its end; nothing is compiled on this path.
+
+#### 2. Download the boxes
+
+Both boxes are in one [Tsinghua Cloud folder](https://cloud.tsinghua.edu.cn/d/3bae9158af5c44578962/). The links below download directly; `-c` resumes an interrupted download when the same line is rerun.
+
+``` bash
+mkdir -p ~/harmgen-boxes && cd ~/harmgen-boxes
+wget -c -O harmgen-bbrv3.box          'https://cloud.tsinghua.edu.cn/d/3bae9158af5c44578962/files/?p=%2Fharmgen-bbrv3.box&dl=1'
+wget -c -O harmgen-dualpi2-prague.box 'https://cloud.tsinghua.edu.cn/d/3bae9158af5c44578962/files/?p=%2Fharmgen-dualpi2-prague.box&dl=1'
+sha256sum harmgen-*.box
+```
+
+Both checksums must match the table. If one does not, check the file type: a real box is `gzip compressed data`, and `HTML document` means the server returned a web page instead of the file, usually because the URL lost its quotes or its `&dl=1`.
+
+``` bash
+file harmgen-*.box
+```
+
+#### 3. Add the boxes to Vagrant
+
+``` bash
+vagrant box add --name harmgen/bbrv3          ~/harmgen-boxes/harmgen-bbrv3.box
+vagrant box add --name harmgen/dualpi2-prague ~/harmgen-boxes/harmgen-dualpi2-prague.box
+vagrant box list | grep harmgen                # both listed, provider libvirt
+```
+
+#### 4. Start the VMs
+
+`HARMGEN_BOX` tells the Vagrantfile to use the prebuilt box instead of `generic/ubuntu2204`. It is read only when a VM is created, so later `vagrant` commands do not need it.
+
+``` bash
+cd vm-bbrv3
+HARMGEN_BOX=harmgen/bbrv3 vagrant up --provider=libvirt
+
+cd ../vm-dualpi2-prague
+HARMGEN_BOX=harmgen/dualpi2-prague vagrant up --provider=libvirt
+```
+
+The first `vagrant up` of each box uploads its image into the libvirt `default` storage pool, which takes a few minutes. It also rsyncs the checkout's `harm-exp` into `/home/vagrant/harm-exp`, so the VM runs the code in your checkout, not a copy frozen into the box.
+
+Each VM is given 8 vCPUs and 8 GB of RAM by the `lv.cpus` and `lv.memory` lines of its Vagrantfile. On a smaller host, lower them before the first `vagrant up`; running both VMs at once needs 16 GB for the guests alone.
+
+If the folder already holds a VM from the build path, `vagrant up` starts that VM and ignores `HARMGEN_BOX`. Run `vagrant destroy -f` in the folder first.
+
+#### 5. Verify the VMs
+
+``` bash
+cd vm-bbrv3
+vagrant ssh -c "uname -r; cat /sys/module/tcp_bbr/version; sysctl net.ipv4.tcp_available_congestion_control"
+```
+
+```
+6.13.7+v3+90210de4b779+GCE
+3
+net.ipv4.tcp_available_congestion_control = reno bbr bbr1 bic cdg cubic dctcp westwood highspeed hybla htcp vegas nv veno scalable lp yeah illinois
+```
+
+``` bash
+cd ../vm-dualpi2-prague
+vagrant ssh -c "uname -r; sudo modprobe -a sch_dualpi2 tcp_prague; sysctl net.ipv4.tcp_available_congestion_control; ~/iproute2/tc/tc -V"
+```
+
+```
+5.15.72-prague-1
+net.ipv4.tcp_available_congestion_control = reno cubic prague
+tc utility, iproute2-5.12.0, libbpf 0.5.0
+```
+
+In each VM, confirm the Python dependencies:
+
+``` bash
+vagrant ssh -c 'cd ~/harm-exp && python3 -c "import numpy, pandas, matplotlib, seaborn, sklearn, scapy, ruptures, psutil, modAL; print(\"deps ok\")"'
+```
+
+#### 6. Continue with Section 7
+
+Skip [Experiment dependencies](#experiment-dependencies) and go to [Per-boot configuration](#per-boot-configuration): `vm-dualpi2-prague` still needs it after every boot, including the first. Log in with `vagrant ssh` from the VM's folder; everything in [Reproducing Section 7](#reproducing-section-7) runs inside the VM, and the rules in [Common Vagrant commands](#common-vagrant-commands) about `vagrant rsync-back` apply unchanged.
+
+| Symptom | Fix |
+| --- | --- |
+| `sha256sum` mismatch, and `file` reports `HTML document` | The server returned a web page instead of the box. Delete the file and rerun the `wget` line with the URL single-quoted and ending in `&dl=1`. |
+| `sha256sum` mismatch, and `file` reports `gzip compressed data` | The download stopped early. Rerun the same `wget -c` line to finish it. |
+| `vagrant up` repeats `Warning: Authentication failure. Retrying...` | The box does not carry Vagrant's insecure public key. This is a packaging fault in the box, not in your setup; report it. |
+| `vagrant up` fails with `... of domain about to create is already taken` | A VM from the build path still exists under the same name. Remove it with `vagrant destroy -f` in that folder or with [the cleanup script](#removing-a-vm). |
+
+#### Removing the boxes
+
+Destroy the VMs first, with `vagrant destroy -f` in each folder or with [the cleanup script](#removing-a-vm), which skips the SSH keys this path never created. `vagrant box remove` does not delete the image imported into the libvirt pool, so remove that too; its name ends in a timestamp (`harmgen-VAGRANTSLASH-bbrv3_vagrant_box_image_0_<timestamp>_box.img`):
+
+``` bash
+vagrant box remove harmgen/bbrv3
+vagrant box remove harmgen/dualpi2-prague
+for v in $(virsh -c qemu:///system vol-list default | awk '/^ *harmgen-VAGRANTSLASH-/ {print $1}'); do
+  virsh -c qemu:///system vol-delete --pool default "$v"
+done
+rm -rf ~/harmgen-boxes
 ```
 
 ### Common Vagrant commands
@@ -543,7 +665,7 @@ The pip line is unpinned, so it resolves to whatever is current. A known-good se
 `vm-dualpi2-prague` needs the L4S modules and ECN, **every boot**:
 
 ``` bash
-sudo modprobe sch_dualpi2 tcp_prague
+sudo modprobe -a sch_dualpi2 tcp_prague
 sudo sysctl -w net.ipv4.tcp_ecn=3
 sudo sysctl -w net.ipv4.tcp_congestion_control=prague
 ```

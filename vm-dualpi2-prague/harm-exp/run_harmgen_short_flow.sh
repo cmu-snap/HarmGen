@@ -2,7 +2,7 @@
 # HarmGen, short-flow workload: Cubic short flows against a long Prague flow (Section 7.2, Fig 18).
 # RUN ON vm-dualpi2-prague (needs DualPI2 + Prague).
 # Prerequisites once per boot -- see README:
-#   sudo modprobe sch_dualpi2 tcp_prague
+#   sudo modprobe -a sch_dualpi2 tcp_prague
 #   sudo sysctl -w net.ipv4.tcp_ecn=3
 #   sudo sysctl -w net.ipv4.tcp_congestion_control=prague
 set -u
