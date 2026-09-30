@@ -644,7 +644,7 @@ In `vm-bbrv3/harm-exp/mahak_results/`:
 | Path | What it is |
 | --- | --- |
 | `cubic-bbr1-240.0-long-flow/final_predictions.csv` | predicted harm for every point in the search space |
-| `.../selected_samples.csv` | the settings Mahak actually chose to measure, in order |
+| `.../selected_samples.csv` | the settings Mahak actually chose to measure, in order; `status` is `invalid` (empty `harm`, reason in `error`) when a setting produced unusable data twice, and such rows are excluded from the model and the plots |
 | `.../mahak-<var>-heatmap-cubic-bbr1-long-flow.pdf` | predicted-harm heatmaps, bandwidth against RTT / queue / flow counts (paper Fig 15) |
 | `.../sampling_mahak_cubic_bbr1_240.0_long-flow_<var>.pdf` | where the active learner sampled (paper Fig 8) |
 | `.../experiments/<bw>bw-<rtt>rtt-<queue>q-.../` | per-experiment throughput traces and PNGs |

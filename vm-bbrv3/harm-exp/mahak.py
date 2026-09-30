@@ -149,9 +149,11 @@ T_data = scaler.fit_transform(TrainData)
 pca = PCA()
 D_data = pca.fit_transform(T_data)
 
-n_initial = 1
-initial_idx = np.random.choice(range(len(D_data)), size=n_initial)
+MAX_INITIAL_ATTEMPTS = 10
 
+# Returns (harm, None) for a valid measurement, or (None, reason) when the experiment
+# produced unusable data twice. A failure must never become a label: harm 0.0 is a
+# legitimate measurement meaning "no harm".
 def oracle_query_harm(sample_row, beta_cca, alpha_cca, experiment_type, short_flow_harm_metric):
     bw = int(sample_row[0])
     rtt = int(sample_row[1])
@@ -174,11 +176,11 @@ def oracle_query_harm(sample_row, beta_cca, alpha_cca, experiment_type, short_fl
             try:
                 harm = run_tc_short_flow_experiment(exp_dir, bw, rtt, queue, num_beta_flows, num_alpha_flows, alpha_start_type, beta_cca, alpha_cca, short_flow_harm_metric, dualpi2=use_dualpi2)
             except ExperimentDataError as exc2:
-                logger.error(f"Short flow experiment still unusable ({exc2}); recording harm 0.0")
-                return np.array([0.0])
+                logger.error(f"Short flow experiment still unusable ({exc2}); marking sample invalid")
+                return None, str(exc2)
 
         logger.info(f"Short flow experiment completed: BW={bw}, RTT={rtt}, Queue={queue}, Harm={harm:.4f}")
-        return np.array([harm])
+        return np.array([harm]), None
     else:
         alpha_start_times = ALPHA_FLOW_START_TIMES_LONG_FLOW[:num_alpha_flows]
         exp_dir = f"{dir_path}/experiments/{bw}bw-{rtt}rtt-{queue}q-{beta_cca}-{num_beta_flows}-{alpha_cca}-{num_alpha_flows}"
@@ -192,26 +194,44 @@ def oracle_query_harm(sample_row, beta_cca, alpha_cca, experiment_type, short_fl
             try:
                 harm, conv_time, converged = run_tc_long_flow_experiment(exp_dir, bw, rtt, queue, num_beta_flows, num_alpha_flows, alpha_start_times, beta_cca, alpha_cca, dualpi2=use_dualpi2, convergence=convergence)
             except ExperimentDataError as exc2:
-                logger.error(f"Long flow experiment still unusable ({exc2}); recording harm 0.0")
-                return np.array([0.0])
+                logger.error(f"Long flow experiment still unusable ({exc2}); marking sample invalid")
+                return None, str(exc2)
 
         if converged:
             logger.info(f"Long flow experiment converged at {conv_time:.2f}s: BW={bw}, RTT={rtt}, Queue={queue}, Harm={harm:.4f}")
-            return np.array([harm])
+            return np.array([harm]), None
         else:
             logger.warning(f"Long flow experiment did not converge: BW={bw}, RTT={rtt}, Queue={queue}, Harm={harm:.4f}")
-            return np.array([harm])
-
-X_training = D_data[initial_idx,:]
-y_training = oracle_query_harm(np.array(TrainData.iloc[initial_idx])[0], beta_cca, alpha_cca, experiment_type, short_flow_harm_metric)
+            return np.array([harm]), None
 
 selected_samples = []
+invalid_idx = set()
+selection_filename = f'{dir_path}/selected_samples.csv'
 
-initial_sample = TrainData.iloc[initial_idx].copy()
-initial_sample = initial_sample.reset_index(drop=True)
-initial_sample['harm'] = y_training[0]
-initial_sample['iteration'] = 0
-selected_samples.append(initial_sample)
+def record_sample(idx, label, error, iteration):
+    sample = TrainData.iloc[[idx]].copy()
+    sample['harm'] = np.nan if label is None else label[0]
+    sample['status'] = 'invalid' if label is None else 'valid'
+    sample['iteration'] = iteration
+    sample['error'] = error or ''
+    selected_samples.append(sample)
+
+y_training = None
+for attempt in range(1, MAX_INITIAL_ATTEMPTS + 1):
+    initial_idx = int(np.random.choice(len(D_data)))
+    label, error = oracle_query_harm(np.array(TrainData.iloc[initial_idx]), beta_cca, alpha_cca, experiment_type, short_flow_harm_metric)
+    record_sample(initial_idx, label, error, 0)
+    if label is not None:
+        X_training = D_data[[initial_idx], :]
+        y_training = label
+        break
+    invalid_idx.add(initial_idx)
+    logger.warning(f"Initial sample {attempt}/{MAX_INITIAL_ATTEMPTS} is invalid; drawing another")
+
+if y_training is None:
+    pd.concat(selected_samples, ignore_index=True).to_csv(selection_filename, index=False)
+    logger.error(f"No valid initial sample after {MAX_INITIAL_ATTEMPTS} attempts; check the testbed. Attempts saved to {selection_filename}")
+    sys.exit(1)
 
 time.sleep(1)
 
@@ -219,6 +239,9 @@ kernel = RBF(length_scale=0.1, length_scale_bounds=(1e-60, 1e5))
 
 def GP_regression_std(regressor, X):
     _, std = regressor.predict(X, return_std=True)
+    # An invalid point is never taught, so its std stays high; without this mask
+    # the learner would query the same failing point on every iteration.
+    std[list(invalid_idx)] = -np.inf
     return np.argmax(std)
 
 def GP_regression_result(regressor, X):
@@ -248,14 +271,13 @@ while total_time_used < float(time_limit_hours) * 3600 and iteration_count < bud
     query_idx, query_instance = regressor.query(D_data)
     new_data_original = np.array(TrainData.iloc[query_idx])
     new_data_transformed = D_data[query_idx,:].reshape(1, -1)
-    new_label = oracle_query_harm(new_data_original, beta_cca, alpha_cca, experiment_type, short_flow_harm_metric)
-    
-    regressor.teach(new_data_transformed, new_label)
+    new_label, error = oracle_query_harm(new_data_original, beta_cca, alpha_cca, experiment_type, short_flow_harm_metric)
 
-    current_sample = TrainData.iloc[[query_idx]].copy()
-    current_sample['harm'] = new_label
-    current_sample['iteration'] = iteration_count
-    selected_samples.append(current_sample)
+    if new_label is None:
+        invalid_idx.add(int(query_idx))
+    else:
+        regressor.teach(new_data_transformed, new_label)
+    record_sample(query_idx, new_label, error, iteration_count)
 
     iteration_end = time.time()
     iteration_duration = iteration_end - iteration_start
@@ -264,7 +286,10 @@ while total_time_used < float(time_limit_hours) * 3600 and iteration_count < bud
     
     logger.info(f"Iteration {iteration_count}/{budget} completed")
     logger.info(f"  Selected point: {new_data_original}")
-    logger.info(f"  Harm value: {new_label[0]:.4f}")
+    if new_label is None:
+        logger.info(f"  Harm value: invalid, excluded from training ({error})")
+    else:
+        logger.info(f"  Harm value: {new_label[0]:.4f}")
     logger.info(f"  Time elapsed: {iteration_duration:.2f} seconds")
     logger.info(f"  Total time used: {total_time_used/3600:.2f} hours (Limit: {time_limit_hours} hours)")
     logger.info(f"  Memory usage: {mem_usage:.2f} MB")
@@ -293,11 +318,14 @@ final_prediction_file = f'{dir_path}/final_predictions.csv'
 TrainData.to_csv(final_prediction_file, index=False)
 
 selected_samples_df = pd.concat(selected_samples, ignore_index=True)
-selection_filename = f'{dir_path}/selected_samples.csv'
 selected_samples_df.to_csv(selection_filename, index=False)
+num_invalid = int((selected_samples_df['status'] == 'invalid').sum())
 
 final_mem = process.memory_info().rss / (1024 * 1024)
 logger.info(f"Total iterations completed: {iteration_count}")
+logger.info(f"Valid samples: {len(selected_samples_df) - num_invalid}, invalid samples (excluded from training): {num_invalid}")
+if num_invalid:
+    logger.warning(f"{num_invalid} sample(s) produced unusable data; see the status and error columns of {selection_filename}")
 logger.info(f"Total time used: {total_time_used/3600:.2f} hours (Limit: {time_limit_hours} hours)")
 logger.info(f"Final memory usage: {final_mem:.2f} MB")
 logger.info(f"Total memory increase: {(final_mem - initial_mem):.2f} MB")

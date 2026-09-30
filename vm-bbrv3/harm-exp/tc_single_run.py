@@ -646,8 +646,8 @@ def plot_tc_short_flow_results(exp_dir, bw, rtt, queue, baseline_data, comp_a_be
                     f"Max Alpha End Time: {max_alpha_end_time:.2f} s"
     
     else:
-        harm = 0
-        harm_text = "Harm calculation method not recognized."
+        plt.close(fig)
+        raise ValueError(f"Unknown short_flow_harm_metric '{short_flow_harm_metric}'; expected download_bytes or recovery_time")
 
     plt.suptitle(f'Short Flow Experiment: {cca_beta} vs {cca_alpha} with {"DualPI2" if dualpi2 else "pfifo"} (BW={bw}Mbps, RTT={rtt}ms, Queue={queue}, BDP={bdp_multiple_})', fontsize=18)
     plt.figtext(0.6, 0.01, harm_text, ha='center', fontsize=12,

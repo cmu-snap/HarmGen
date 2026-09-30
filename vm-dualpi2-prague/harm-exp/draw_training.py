@@ -8,6 +8,8 @@ def load_and_prep_data(filepath):
     if not os.path.exists(filepath):
         return pd.DataFrame()
     df = pd.read_csv(filepath)
+    if 'status' in df.columns:
+        df = df[df['status'] == 'valid']
     df = df[
         (df['bw'].between(25, 200)) &
         (df['rtt'].between(10, 100)) &
