@@ -2,9 +2,9 @@
 
 A new framework for evaluating fairness between heterogeneous congestion control algorithms (CCAs). We integrate it into **Mahak**, an existing active-learning tool, and present **HarmGen**, a new genetic algorithm that searches for the network settings where two CCAs interact worst.
 
-This artifact reproduces the paper's Section 7 case studies: the evolution of BBR (Cubic vs BBRv1 against Cubic vs BBRv3), and L4S (TCP Prague vs Cubic over a DualPI2 AQM).
+This artifact reproduces Figures 12–14 from Section 6 and the Section 7 case studies on Cubic vs BBR and TCP Prague vs Cubic.
 
-> Section 6 runs its experiments on [BESS](https://github.com/NetSys/bess), a software switch whose environment takes considerable effort to build and is hard to stand up quickly. Section 7 instead uses emulation tools that any Linux machine already has — tc and mahimahi — which is why we present artifact that reproduces Section 7. Note that swapping BESS for these emulation tools only changes how a single experiment's result is measured; the genetic algorithm of HarmGen and the active-learning framework of Mahak, that is, the core code, are unchanged.
+The paper's Section 6 experiments use the BESS software switch. Building and configuring the BESS testbed takes considerable effort, so the artifact uses Linux traffic control (`tc`) to measure each scenario. HarmGen uses the same genetic search procedure, and Mahak uses the same active-learning framework. Measured harm values and rankings can vary between testbeds. [BESS](https://github.com/NetSys/bess)
 
 The experiments run in two Vagrant/libvirt VMs. BBRv3 and DualPI2 + TCP Prague patch the same kernel subsystems and cannot coexist in one tree, so each gets its own VM with its own copy of `harm-exp`.
 
@@ -41,11 +41,14 @@ Each folder is a standalone Vagrant environment: run all `vagrant` commands from
     - [3. Add the boxes to Vagrant](#3-add-the-boxes-to-vagrant)
     - [4. Start the VMs](#4-start-the-vms)
     - [5. Verify the VMs](#5-verify-the-vms)
-    - [6. Continue with Section 7](#6-continue-with-section-7)
+    - [6. Continue with the experiments](#6-continue-with-the-experiments)
     - [Removing the boxes](#removing-the-boxes)
   - [Common Vagrant commands](#common-vagrant-commands)
   - [Troubleshooting](#troubleshooting)
   - [Removing a VM](#removing-a-vm)
+- [Reproducing Section 6](#reproducing-section-6)
+  - [Reproduce Figure 12](#reproduce-figure-12)
+  - [Reproduce Figures 13 and 14](#reproduce-figures-13-and-14)
 - [Reproducing Section 7](#reproducing-section-7)
   - [Experiment dependencies](#experiment-dependencies)
   - [Per-boot configuration](#per-boot-configuration)
@@ -58,7 +61,7 @@ Each folder is a standalone Vagrant environment: run all `vagrant` commands from
 
 ## Code Structure
 
-The two `harm-exp` trees hold identical `.py` files; only the run scripts differ, because each VM can only exercise the CCAs its own kernel provides.
+Both `harm-exp` trees include the Section 7 measurement and plotting code. The BBRv3 VM also includes the Section 6.1 comparison because its kernel provides Reno and Westwood.
 
 ```
 ├── vm-bbrv3                                    # VM 1: BBRv3
@@ -81,10 +84,13 @@ The two `harm-exp` trees hold identical `.py` files; only the run scripts differ
 │       ├── run_mahak.sh                        # scripts to run codes
 │       ├── run_harmgen_long_flow.sh
 │       ├── run_harmgen_short_flow.sh
+│       ├── run_figure12.sh                     # Figure 12
+│       ├── run_figures13_14.sh                 # Figures 13 and 14
+│       ├── section6_*.py                       # searches, tc measurements, and plots
 │       └── run_section7_1.sh                   # full Section 7.1 reproduction
 ├── vm-dualpi2-prague                           # VM 2: DualPI2 + TCP Prague
 │   ├── Vagrantfile
-│   └── harm-exp                                # same .py files; run_section7_2.sh instead of 7_1
+│   └── harm-exp                                # Section 7.2 code and run scripts
 └── README.md
 ```
 
@@ -513,9 +519,9 @@ In each VM, confirm the Python dependencies:
 vagrant ssh -c 'cd ~/harm-exp && python3 -c "import numpy, pandas, matplotlib, seaborn, sklearn, scapy, ruptures, psutil, modAL; print(\"deps ok\")"'
 ```
 
-#### 6. Continue with Section 7
+#### 6. Continue with the experiments
 
-Skip [Experiment dependencies](#experiment-dependencies) and go to [Per-boot configuration](#per-boot-configuration): `vm-dualpi2-prague` still needs it after every boot, including the first. Log in with `vagrant ssh` from the VM's folder; everything in [Reproducing Section 7](#reproducing-section-7) runs inside the VM, and the rules in [Common Vagrant commands](#common-vagrant-commands) about `vagrant rsync-back` apply unchanged.
+The prebuilt boxes include the [experiment dependencies](#experiment-dependencies). Log in with `vagrant ssh` from the VM's folder. For Reno vs Westwood, follow [Reproducing Section 6](#reproducing-section-6) in the BBRv3 VM. For the case studies, follow [Reproducing Section 7](#reproducing-section-7), including the per-boot configuration for the DualPI2 + TCP Prague VM.
 
 | Symptom | Fix |
 | --- | --- |
@@ -630,6 +636,48 @@ fi
 echo '==> Done.'
 virsh -c qemu:///system list --all | grep -F "${DOMAIN}" || echo "    domain gone"
 ```
+
+## Reproducing Section 6
+
+Both scripts run in **vm-bbrv3**. Start it using the [source-build](#vm-1--bbrv3) or [prebuilt](#alternative-prebuilt-vagrant-boxes) instructions. The source-build path also needs the [experiment dependencies](#experiment-dependencies). Enable Westwood after boot, then run the scripts from `~/harm-exp` inside the VM.
+
+```bash
+sudo modprobe tcp_westwood
+allowed=$(sysctl -n net.ipv4.tcp_allowed_congestion_control)
+case " $allowed " in
+  *" westwood "*) ;;
+  *) sudo sysctl -w "net.ipv4.tcp_allowed_congestion_control=$allowed westwood" ;;
+esac
+cd ~/harm-exp
+```
+
+Run the experiments one at a time inside each VM because the scripts create and remove the same virtual test network. Keep at least 25 GB free for temporary captures. Rerun the same command to resume a run, or add `--analyze-only` to redraw its figures. To copy the results to the host, run `vagrant rsync-back` from `vm-bbrv3` before running `vagrant rsync` or `vagrant up`.
+
+### Reproduce Figure 12
+
+The script measures the same 300 randomly chosen settings for five CCA pairs. It takes about **7 days** on one VM.
+
+```bash
+./run_figure12.sh
+```
+
+The figure is saved to `results/section6-figure12/figure12_relative_harm_cdf.pdf`.
+
+### Reproduce Figures 13 and 14
+
+HarmGen, random search, and hill climbing each measure 300 distinct Reno vs Westwood scenarios. The full comparison also measures all 3,500 sweep scenarios.
+
+| Command | Measurements | Approximate time on one VM |
+| --- | --- | --- |
+| `./run_figures13_14.sh` | 4,400 scenarios, including the sweep | 20 days |
+| `./run_figures13_14.sh --skip-sweep` | 900 scenarios for the three equal-budget searches | 4 days |
+
+After a `--skip-sweep` run, use the same output directory for the full run to reuse the three searches and add the sweep.
+
+- Figure 13 is saved to `results/section6-figures13-14/figure13_relative_harm_cdf.pdf`.
+- Figure 14 is saved to `results/section6-figures13-14/figure14_scenario_diversity.pdf`.
+
+With `--skip-sweep`, both PDFs are saved under `results/section6-figures13-14/without-sweep/`.
 
 ## Reproducing Section 7
 
